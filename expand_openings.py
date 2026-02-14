@@ -14,7 +14,7 @@ import requests
 LICHESS_MASTERS = "https://explorer.lichess.ovh/master"
 LICHESS_DB = "https://explorer.lichess.ovh/lichess"
 RATING_BANDS = (1600, 1800, 2000, 2500)
-STOCKFISH_HASH = 8192
+STOCKFISH_HASH = 32768 # 32GB
 STOCKFISH_THREADS = os.cpu_count() or 8
 
 
