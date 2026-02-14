@@ -14,8 +14,9 @@ import requests
 LICHESS_MASTERS = "https://explorer.lichess.ovh/master"
 LICHESS_DB = "https://explorer.lichess.ovh/lichess"
 RATING_BANDS = (1600, 1800, 2000, 2500)
-STOCKFISH_HASH = 8192
+STOCKFISH_HASH = 32768  # 32 GB
 STOCKFISH_THREADS = os.cpu_count() or 8
+STOCKFISH_LARGE_PAGES = True  # Reduce TLB pressure with big hash; used only if engine supports it
 
 
 def top_moves(
@@ -69,13 +70,29 @@ def _find_stockfish() -> str:
     )
 
 
-def get_best_move(fen: str, time_limit: float = 0.5) -> str:
-    """Return best move in SAN using Stockfish."""
+def _configure_engine(engine: chess.engine.SimpleEngine) -> None:
+    config: dict = {"Hash": STOCKFISH_HASH, "Threads": STOCKFISH_THREADS}
+    if "Large Pages" in engine.options:
+        config["Large Pages"] = STOCKFISH_LARGE_PAGES
+    elif "LargePages" in engine.options:
+        config["LargePages"] = STOCKFISH_LARGE_PAGES
+    engine.configure(config)
+
+
+def get_best_move(
+    fen: str,
+    time_limit: float = 0.5,
+    engine: chess.engine.SimpleEngine | None = None,
+) -> str:
+    """Return best move in SAN using Stockfish. Reuses engine if provided."""
     board = chess.Board(fen)
-    path = _find_stockfish()
-    with chess.engine.SimpleEngine.popen_uci(path) as engine:
-        engine.configure({"Hash": STOCKFISH_HASH, "Threads": STOCKFISH_THREADS})
+    if engine is not None:
         result = engine.play(board, chess.engine.Limit(time=time_limit))
+        return board.san(result.move)
+    path = _find_stockfish()
+    with chess.engine.SimpleEngine.popen_uci(path) as eng:
+        _configure_engine(eng)
+        result = eng.play(board, chess.engine.Limit(time=time_limit))
         return board.san(result.move)
 
 
@@ -89,23 +106,29 @@ def expand_openings(
     player_name = "White" if player == chess.WHITE else "Black"
     print(f"  Starting with {len(openings)} lines")
 
-    for i in range(iterations):
-        new_lines = []
-        for line in openings:
-            board = chess.Board()
-            for move in line.split():
-                board.push(board.parse_san(move))
-            if board.turn != player:
-                fen = board.fen()
-                candidates = top_moves(fen, min_rating=2500)
-                if len(candidates) < 1:
-                    candidates = [{"san": get_best_move(fen, time_limit=1)}]
-                for move in candidates:
-                    new_lines.append(line + " " + move["san"])
-            else:
-                new_lines.append(line + " " + get_best_move(board.fen()))
-        openings = new_lines
-        print(f"  Iteration {i + 1}/{iterations}: {len(openings)} lines")
+    path = _find_stockfish()
+    with chess.engine.SimpleEngine.popen_uci(path) as engine:
+        _configure_engine(engine)
+
+        for i in range(iterations):
+            new_lines = []
+            for line in openings:
+                board = chess.Board()
+                for move in line.split():
+                    board.push(board.parse_san(move))
+                if board.turn != player:
+                    fen = board.fen()
+                    candidates = top_moves(fen, min_rating=2500)
+                    if len(candidates) < 1:
+                        candidates = [{"san": get_best_move(fen, 1, engine)}]
+                    for move in candidates:
+                        new_lines.append(line + " " + move["san"])
+                else:
+                    new_lines.append(
+                        line + " " + get_best_move(board.fen(), 30, engine)
+                    )
+            openings = new_lines
+            print(f"  Iteration {i + 1}/{iterations}: {len(openings)} lines")
 
     print(f"  Done: {len(openings)} {player_name} openings")
     return openings
@@ -117,14 +140,14 @@ def main() -> None:
 
     print("Expanding White openings...")
     white_lines = expand_openings(
-        white_openings, player=chess.WHITE, iterations=4
+        white_openings, player=chess.WHITE, iterations=20
     )
     with open("white_openings.txt", "w") as f:
         for line in sorted(white_lines):
             f.write(line + "\n")
     print("Expanding Black openings...")
     black_lines = expand_openings(
-        black_openings, player=chess.BLACK, iterations=4
+        black_openings, player=chess.BLACK, iterations=20
     )
     with open("black_openings.txt", "w") as f:
         for line in sorted(black_lines):
