@@ -14,7 +14,7 @@ import requests
 LICHESS_MASTERS = "https://explorer.lichess.ovh/master"
 LICHESS_DB = "https://explorer.lichess.ovh/lichess"
 RATING_BANDS = (1600, 1800, 2000, 2500)
-STOCKFISH_HASH = 32768 # 32GB
+STOCKFISH_HASH = 8192
 STOCKFISH_THREADS = os.cpu_count() or 8
 
 
@@ -49,10 +49,30 @@ def top_moves(
     return moves
 
 
+STOCKFISH_PATHS = [
+    "/opt/homebrew/bin/stockfish",
+    "/usr/local/bin/stockfish",
+    "/usr/bin/stockfish",
+]
+
+
+def _find_stockfish() -> str:
+    path = shutil.which("stockfish")
+    if path:
+        return path
+    for p in STOCKFISH_PATHS:
+        if os.path.isfile(p):
+            return p
+    raise FileNotFoundError(
+        "Stockfish not found. Install it (e.g. brew install stockfish or apt install stockfish) "
+        "and ensure it's in PATH."
+    )
+
+
 def get_best_move(fen: str, time_limit: float = 0.5) -> str:
     """Return best move in SAN using Stockfish."""
     board = chess.Board(fen)
-    path = shutil.which("stockfish") or "/opt/homebrew/bin/stockfish"
+    path = _find_stockfish()
     with chess.engine.SimpleEngine.popen_uci(path) as engine:
         engine.configure({"Hash": STOCKFISH_HASH, "Threads": STOCKFISH_THREADS})
         result = engine.play(board, chess.engine.Limit(time=time_limit))
